@@ -1,48 +1,67 @@
 # Product Requirements Document (PRD): Domain Endpoint Resolver
-[!IMPORTANT] When feeding this into an AI context window, keep the language imperative and literal. Avoid descriptive marketing speak. The AI needs strict rules, not persuasion.
 
 ## 1. System Objective
-> [!IMPORTANT]
-> [Provide a 1-2 sentence description of the exact system to be built. Example: "A Rust-based edge service that ingests high-frequency sensor data via MQTT, normalizes the payload, and routes it to a central event stream."]
+A fault-tolerant, resilient and scalable Rust-based distributed mesh network for event domain endpoint discovery. An event sink, or router, can register its event endpoint as well as its health check URI with a mesh node. An event source, or router can query a mesh network node for the endpoint address of a particular domain. The integrity and health of the mesh network is of critical importance, consequently, the mesh network, should on a periodic basis call the health check endpoints, and remove any domain/endpoints from the mesh network.
 
 ## 2. Tech Stack & Architectural Constraints
->[!IMPORTANT] 
-[Explicitly lock in the boundaries so the AI does not hallucinate frameworks or make unwanted design choices.]
-
-- Primary Language: [e.g., Rust, strict adherence to idiomatic error handling]
-- Architecture Pattern: [e.g., Event-Driven Architecture utilizing Domain-Driven Design principles]
-
-- Communication Protocols: [e.g., MQTT for ingestion, gRPC for internal microservice communication]
-
-- Key Dependencies: [e.g., nom for string parsing, tokio for async runtime]
+- **Architecture Pattern**: Distributed Architecture utilizing Domain-Driven Design principles
+- Use HyParView and PlumbTree to gossip and propagate node data within the mesh network.
+- **Primary Language**: Rust, strict adherence to idiomatic error handling
+- **Communication Protocol**: HTTP/3 with fall back to HTTP/2
+- **Key Rust Crate Dependencies**:
+  - saorsa-gossip
+  - clap
+  - quiche + tokio-quiche
+  - rmp
 
 ## 3. Functional Requirements
->[!IMPORTANT]
-[Define the exact capabilities. Format as concrete rules or strict input/output transformations.]
 
-- **Requirement 1 (Ingestion):** The system must accept incoming connections on [Port/Endpoint] and maintain a continuous listening state.
-- **Requirement 2 (Validation):** The system must validate that the incoming Data Transfer Object (DTO) contains all required fields before processing.
-- **Requirement 3 (Transformation):** The system must parse the raw input and map it to the internal domain entity.
-- **Requirement 4 (Output):** The system must publish the validated payload to the designated downstream service or topic.
+### Requirement 1 - Endpoint Registration:
+The system will provide a ```/Register``` endpoint, that will allow an event sink or event router to register endpoint data with the mesh.
+
+An event sink can register multiple domains, where each domain must contain one or more listeners. 
+
+This is an HTTP Post, with the following message payload format:
+```
+[
+  {
+    "domain" : "EventDomain.Food@v1",
+    "healthcheck" : "127.0.0.1:5076",
+    "listeners" : [
+      "https://domain1:5050",
+      "https://domain2:5051"
+    ]  
+  },
+    {
+    "domain" : "EventDomain.uality@v1",
+    "healthcheck" : "127.0.0.1:5077",
+    "listeners" : [
+      "https://domain3:5060",
+      "https://domain4:5061"
+    ]  
+  }
+]
+```
+
+### Requirement 2 - Data Serialization
+- All data sent from an event sink or router, to a mesh node will be serialized into a binary format using messagepack. The mesh node will deserialize the data and then propagate the data through the mesh network.
+- All data sent from a mesh node to a event sink or router must be serialized into a binary format using messagepack. Data received from a mesh node must be deserialized using messagepack.
+
+### Requirement 4 - Encrypted Payload
+The system must provide the ability to encrypt the payload data whilst in transit over a network. The system will provide a command line argument specifying the certificate that is to be used in encrypting payload data. This is inherently provided by HTTP/3 TLS 1.3 or greater. 
+
+### Requirement 5 - Health Check
+On a user specified periodic basis via a command line parameter the mesh node should make a call to the health check URI that was provided as part or the ```/Register``` call, to determine if the event sink or router is healthy. If the event sink or router returns an unhealthy state, the mesh node should remove the endpoint for the domain it belongs to.
+The healthy endpoint should return an HTTP Status code of 200 and the response body text should contain the text "healthy". An unhealthy endpoint should return an HTTP status code 503, and teh text "unhealthy" in the response body. 
 
 ## 4. Out of Scope (Negative Constraints)
-> [!IMPORTANT]
-> [Crucial for AI: List exactly what the AI should NOT build to prevent over-engineering and token waste.]
-- Do NOT build a frontend or UI component.
-- Do NOT implement persistent database storage (this service only routes data
-- Do NOT write authentication logic (assume payloads are authenticated at the gateway layer).
-- Do NOT include dynamic configuration management (use static environment variables for now).
+- Event Router and Event Sink implementations
+- Do NOT implement persistent database storage this service only routes data
 
 ## 5. Core Domain Entities
-> [!IMPORTANT]
-> [Define the primary nouns of your system. This sets up the AI to accurately generate your core structs and domain logic without leaking concerns.]
-- Entity 1: [Entity Name] (Attributes: id (type), timestamp (type), value (type)).
-- Entity 2: [Entity Name] (Attributes: code (type), severity_level (enum)).
+- Entity 1: Event Sink
+- Entity 2: Event Router
+- Entity 3: Event Source
 
 ## 6. Error Handling & Edge Cases
->[!IMPORTANT]
-[Specify exactly how the system should fail gracefully.]
 
-If a DTO is malformed, log a structured warning containing the raw payload and drop the packet. Do not panic or crash the thread.
-
-If the downstream network connection is unavailable, implement an exponential backoff retry mechanism (max 3 attempts) before discarding the message.

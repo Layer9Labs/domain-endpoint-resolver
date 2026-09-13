@@ -2,22 +2,18 @@
 
 ## What this is
 
-Rust implementation of the **Domain Endpoint Resolver (DER)** — a distributed mesh node for Layer 9 Labs' Event Network Architecture (patent-pending US-20240129230-A1). Event sinks register their domain + endpoint + health-check URI with the mesh; event sources query mesh nodes to resolve domain endpoints; mesh nodes periodically health-check and evict stale entries.
+Rust implementation of the **Domain Endpoint Resolver (DER)** — a distributed mesh node for domain endpoint discovery in Layer 9 Labs' Event Network Architecture. Event sinks register domains + listener endpoints + a health-check URI; the mesh gossips the routing table; event sources query any mesh node to resolve domain endpoints; nodes periodically health-check registered sinks and evict unhealthy entries.
 
 ## Source of truth (docs/)
 
-Read these before making design decisions — the repo is currently docs-heavy, code-light:
+- `docs/Domain Endpoint Resolver Product Requirements Document (PRD).md` — current behavior spec. API surface: `/register` (POST, list of domain/listeners/healthcheck), `/lookup` (GET by domain), `/remove` (DELETE by domain). Stacks: HTTP/3 w/ fallback HTTP/2 (`quiche`+`tokio-quiche`), HyParView+PlumbTree gossip via `saorsa-gossip`, MessagePack (`rmp`) for wire serialization, `clap` for CLI (TLS cert, health-check interval).
+- `docs/context/Technical Brief for Event Network Architecture.md` — architecture context for the mesh (distributed cache, sidecar deployment, gossip semantics). Note: it describes a gRPC interface, but the PRD supersedes that with HTTP routes.
 
-- `docs/context/Technical Brief for Event Network Architecture.md` — authoritative architecture. DER mesh described in §9–10: HyParView gossip membership protocol, gRPC registration interface, distributed routing cache, sidecar deployment model.
-- `docs/Domain Endpoint Resolver Product Requirements Document (PRD).md` — behavior & constraints.
-- `docs/Domain Endpoint Resolver System Design and Specification Document.md` — structure; prescribes `src/{ingestion,domain,adapter}/` module layout where `domain/` must not contain network/IO code.
+Health-check contract (PRD Req 5): healthy = HTTP 200 with body "healthy"; unhealthy = HTTP 503 with body "unhealthy" → remove the domain's endpoints.
 
-**Warning:** the PRD and System Design docs are partly template-filled — bracketed values like "MQTT for ingestion", "nom parser", `TelemetryIngestDTO`, `SensorReading` are *examples from the authors' spec template*, not decisions. Do not implement those placeholders or pick frameworks from them. The Technical Brief is the real spec.
+## Hard constraints (PRD §4)
 
-## Hard constraints (from PRD §4)
-
-- No frontend/UI, no persistent database, no authentication logic, no dynamic config — static environment variables only.
-- Error handling per PRD §6: malformed payloads → structured warning + drop (never panic); downstream availability → bounded exponential backoff retry.
+- Out of scope: Event Router / Event Sink implementations; no persistent database.
 
 ## Build/test
 
@@ -26,5 +22,4 @@ Rust binary crate. **Gotcha:** there is currently no `Cargo.toml` — only `src/
 ## Conventions
 
 - ADRs live in `docs/adrs/` using `docs/adrs/MADR Template.md` (MADR format, numbered `ADR-XXXX`, status line required). Record any significant design decision there.
-- Follow the System Design doc's module structure when adding code; keep DTO/entity mapping as `TryFrom` with specific validation errors, not panics.
-- `*.log` files are gitignored — the stray `*.log` at repo root is scratch OpenCode/IDE output, not something to keep.
+- `*.log` files are gitignored — stray `*.log` files at repo root are scratch tool output, not something to keep.

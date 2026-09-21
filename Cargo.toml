@@ -1,0 +1,33 @@
+[package]
+name = "domain-endpoint-resolver"
+version = "0.1.0"
+edition = "2024"
+autobins = false
+
+[lib]
+name = "domain_endpoint_resolver"
+path = "src/lib.rs"
+
+[[bin]]
+name = "l9l-der"
+path = "src/main.rs"
+
+[dependencies]
+saorsa-gossip = "0.5.83"
+clap = { version = "4.6.6", features = ["derive"] }
+tokio-quiche = { version = "0.20.0", features = ["rpk"] }
+rmp = "0.8.15"
+tracing = "0.1.44"
+
+bytes = "1.12"
+form_urlencoded = "1.2"
+futures = "0.3"
+http = "1.5"
+rmp-serde = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.53", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2.5"
+
+[dev-dependencies]
+boring = "5"

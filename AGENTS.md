@@ -10,21 +10,16 @@ Read these before making design decisions — the repo is currently docs-heavy, 
 
 - `docs/context/Technical Brief for Event Network Architecture.md` — authoritative architecture. DER mesh described in §9–10: HyParView gossip membership protocol, gRPC registration interface, distributed routing cache, sidecar deployment model.
 - `docs/Domain Endpoint Resolver Product Requirements Document (PRD).md` — behavior & constraints.
-- `docs/Domain Endpoint Resolver System Design and Specification Document.md` — structure; prescribes `src/{ingestion,domain,adapter}/` module layout where `domain/` must not contain network/IO code.
-
-**Warning:** the PRD and System Design docs are partly template-filled — bracketed values like "MQTT for ingestion", "nom parser", `TelemetryIngestDTO`, `SensorReading` are *examples from the authors' spec template*, not decisions. Do not implement those placeholders or pick frameworks from them. The Technical Brief is the real spec.
 
 ## Hard constraints (from PRD §4)
-
 - No frontend/UI, no persistent database, no authentication logic, no dynamic config — static environment variables only.
 - Error handling per PRD §6: malformed payloads → structured warning + drop (never panic); downstream availability → bounded exponential backoff retry.
 
 ## Build/test
 
-Rust binary crate. **Gotcha:** there is currently no `Cargo.toml` — only `src/main.rs` (hello world) and `Cargo.lock`. Before `cargo test`/`cargo build` works, a manifest must exist; create it if asked to build (package name: `domain-endpoint-resolver`).
+Rust binary crate. Before `cargo test`/`cargo build` works, a manifest must exist; create it if asked to build (package name: `domain-endpoint-resolver`).
 
 ## Conventions
 
 - ADRs live in `docs/adrs/` using `docs/adrs/MADR Template.md` (MADR format, numbered `ADR-XXXX`, status line required). Record any significant design decision there.
-- Follow the System Design doc's module structure when adding code; keep DTO/entity mapping as `TryFrom` with specific validation errors, not panics.
 - `*.log` files are gitignored — the stray `*.log` at repo root is scratch OpenCode/IDE output, not something to keep.

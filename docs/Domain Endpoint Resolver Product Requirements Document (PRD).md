@@ -1,13 +1,36 @@
 # Product Requirements Document (PRD): Domain Endpoint Resolver
 
 ## 1. System Objective
-To build a fault-tolerant, resilient and scalable Rust-based distributed mesh network for event domain endpoint discovery. An event sink, or router, can register the listeners that it binds to for incoming event data as well as registering its health check URI with a mesh node. An event source, or router can query a mesh network node for the endpoint IP address and port of a particular domain. Each node in the mesh will store the domains and their listener and health check endpoints as part of a local routing table. The registered domains and their listing addresses and health checks must be propagated through the mesh network. The integrity of the domain endpoint data is of critical importance, consequently, each mesh node, should on a periodic basis call the health check endpoints, and remove any domain/endpoints from its local routing table. Changes to the node routing table should be pushed into the mesh, following a Change Data Capture (CDC) pattern.
+To build a fault-tolerant, resilient and scalable Rust-based distributed mesh network for event domain endpoint discovery. An event sink, or router, can register the listeners that it binds to for incoming event data as well as registering its health check URI with a mesh node. An event source, or router can query a mesh network node for the endpoint IP address and port of a particular domain. Each node in the mesh will store the domains and their listener and health check endpoints as part of a local routing table. The registered domains and their listing addresses and health checks must be propagated through the mesh network. The integrity of the domain endpoint data is of critical importance, consequently, each mesh node, should on a periodic basis call the health check endpoints, and remove any domain/endpoints from its local routing table. Changes to the node routing table should be pushed into the mesh, following a Change Data Capture (CDC) pattern. Routing information is disseminated across mesh nodes using the HyParView membership protocol over gossip. Event sinks register what they can receive; event sources resolve where to send.
 
-## 2. Tech Stack & Architectural Constraints
-- **Architecture Pattern**: Distributed Architecture utilizing Domain-Driven Design principles. The DER mesh is a distributed cache of domain names, their IP/Port addresses, and endpoint health status. Routing information is disseminated across DER nodes using the HyParView membership protocol over gossip. Event sinks register what they can receive; event sources resolve where to send.
+## 2. Architectural Elements
+
+There are five components or elements that comprises a Domain Endpoint Node:
+
+1. **HTTP/3 with HTTP/2 fallback** execution thread using tokio-quiche that exposes four HTTP routes as an API surface. There are:
+   - ```/register```
+   - ```/health```
+   - ```lookup```   
+   - ```/remove```
+
+This thread communicates with downstream threads via a channel.
+
+2. **Domain Endpoint Node Routing Table**, which is a dictionary of endpoint data, where the key of the dictionary is the fully qualified domain name, and the value is an array or list of endpoint and health data.
+
+3. **Routing Table Manager**, an execution thread that will consume messages from the HTTP/3 thread via a channel, and them make updates to the **Domain Endpoint Node Routing Table** based on the HTTP REST Verb and route. 
+   
+4. **Gossip Coordinator** an execution thread responsible for communicating routing table changes from the **Routing Table Manager** to other Domain Endpoint Nodes in the mesh. It is also responsible for communicating mesh changes an updates back to **Routing Table Manager**. 
+
+Communication with the **Routing Table Manager** thread is done via a channel. 
+
+5. **Health Heartbeat** an execution thread, that is responsible for making HTTP health check for all of the locally scoped healthCheck entries in the **Domain Endpoint Node Routing Table**. This thread will communicate health check changes with the **Routing Table Manager** using the same channel that the **HTTP/3 with HTTP/2 fallback** thread uses.
+
+- **Architecture Pattern**: Distributed Architecture utilizing Domain-Driven Design principles. The DER mesh is a distributed cache of domain names, their IP/Port addresses, and endpoint health status. 
+
+## 3. Technology Stack
 
 - Use HyParView and PlumTree to gossip and propagate node data within the mesh network.
- 
+
 - **Primary Language**: 
   - Rust
   - Strict adherence to idiomatic error handling
@@ -25,16 +48,24 @@ To build a fault-tolerant, resilient and scalable Rust-based distributed mesh ne
 
 ## 3. Functional Requirements
 
-### Requirement 1 - Mesh Node Routing Table:
+### Requirement 1 - Domain Endpoint Node Routing Table:
+The routing table must only be updated or changed by the **Routing Table Manager** thread, however the **Health Heartbeat** thread will need to have read access to the **Domain Endpoint Node Routing Table**. This means that both threads will need a reference to the routing table in order to either update it or to be able to read the contents.
 
-Mesh Node Routing Table Structure, which is a dictionary of endpoint data, where the key of the dictionary is the fully qualified domain name, and the value is an array or list of endpoint data.
+The structure of the routing table is a dictionary where the key is the fully qualified domain name, and the values for the key includes the following members/fields/elements:
+- **"listener"** a string representing the IP/Port address at which the event sink will listen for incoming events.
+- **healthCheck** a string representing the health check IP/Port and route of the event sink. This implies that an event sink should expose a health check route.
+- **healthCounter** an integer value, initially zero, but a counter of the number of times a health check has failed.
+- **healthStatus** a string representing the health status of the "listener".
+- **isLocalEntry** a boolean value indicating whether or not the entry in the Router Table is one that was registered by an event sink, or if the entry was obtained from a mesh lookup.
+
+Outlined below is a JSON example of what the payload of the routing table could be.
 
 ```json
     {
         "starfoods.food@v1" : [
           {
             "listener" : "https://domain1:5050",
-            "healthcheck" : "https://domain1:5076",
+            "healthCheck" : "https://domain1:5076",
             "healthCounter" : 0,
             "healthStatus" : "healthy",
             "isLocalEntry" : true
@@ -65,6 +96,8 @@ Mesh Node Routing Table Structure, which is a dictionary of endpoint data, where
         ]
     }
 ```
+
+
 
 ### Requirement 2 - Endpoint Registration:
 - The system will provide a ```/register``` route, that will allow an event sink or event router to register listener and healthcheck endpoint information with a mesh node.

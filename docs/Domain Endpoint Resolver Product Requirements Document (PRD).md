@@ -14,7 +14,7 @@ There are five components or elements that comprises a Domain Endpoint Node:
 1. **HTTP Server** execution thread using tokio-quiche that exposes four HTTP routes as an API surface. There are:
    - ```/register```
    - ```/health```
-   - ```/lookup```   
+   - ```/lookup```
    - ```/remove```
 
     This thread communicates with downstream threads via a channel.
@@ -60,6 +60,7 @@ The data that is written and read from the communication frontend and backend ch
 - A member named "domain" that is a string containing the fully qualified domain name
 - A member named "listener" that is the listening endpoint for the event sink that is being inserted, updated or removed.
 - A member named "healthCheck" that is the health check URI for the event sink that is being inserted, updated or removed.
+- A member named "healthCheck" that is the health check status that would be return by the healthCheck endpoint.
 
 Below is a JSON example of what the payload data could look like.
 
@@ -69,7 +70,8 @@ Below is a JSON example of what the payload data could look like.
     "action" : "INSERT",
     "domain" : "starfoods.food@v1",
     "listener" : "https://domain1:5050",
-    "healthCheck" : "https://domain1:5076"    
+    "healthCheck" : "https://domain1:5076",
+    "healthStatus" : "healthy"
 }
 ```
 
@@ -142,7 +144,6 @@ The lifetime of the **Domain Endpoint Node Routing Table** is that of the **Doma
 This thread "listens" for inbound HTTP requests on an IP Address/Port that is specified on the command line.
 
 #### Requirement 5.1 - Endpoint Registration:
-
 - The **HTTP Server** thread will provide a ```/register``` route, that will allow an event sink or event router to register listener and healthCheck endpoint information with a Domain Endpoint Node or mesh node.
 
 - An event sink can register multiple domains, where each domain must contain one or more listeners. 
@@ -150,7 +151,7 @@ This thread "listens" for inbound HTTP requests on an IP Address/Port that is sp
 - The **HTTP Server** thread needs to ensure that appropriate URL encoding is done to the HTTP POST request.
 
 - This is an HTTP POST, with the following register message payload format:
-```json
+    ```json
     [
         {
             "domainName" : "starfoods.food@v1",
@@ -179,20 +180,33 @@ This thread "listens" for inbound HTTP requests on an IP Address/Port that is sp
             ]
         }
     ]
-```
+    ```
 
-Upon receipt of this payload, the **HTTP Server** thread will iterate through the list of domains and create a list of Channel Payload Format records / structures and write them serially to the communication channel.
+Upon receipt of this payload, the **HTTP Server** thread will iterate through the list of domains in the **Domain Endpoint Routing Table** and create a list of Channel Payload Format records and write them serially to the frontend communication channel.
 
 #### Requirement 5.2 - Domain Lookup
-- An event sink or event router needs to query the mesh network to look up the endpoint address or addresses for a given domain.
-The system will provide a ```/lookup``` route.
 
-- The HTTP GET request: ```GET /lookup?domain=starfoods.quality@v1```
+- The **HTTP Server** thread will provide a ```/lookup``` route to enable an event sink or event router to query the mesh node to look up the endpoint address or addresses for a given domain.
 
-- The system needs to ensure that appropriate URL encoding is done to the HTTP GET request.
+- The **HTTP Server** thread needs to ensure that appropriate URL encoding is done to the HTTP GET request.
 
-- The lookup will return a JSON payload with the following structure:
-```json
+- The **HTTP Server** will write the following data payload to the frontend channel upon receiving a HTTP GET request: ```/lookup?domain=starfoods.quality@v1```.
+
+  ```json
+  {
+    "origin" : "HTTP",
+    "action" : "LOOKUP",
+    "domain" : "starfoods.food@v1",
+    "listener" : "",
+    "healthCheck" : "",
+    "healthStatus" : ""
+  }
+  ```
+
+- Upon receipt of a response from the frontend channel the **HTTP Server** will format a response to the HTTP GET request. 
+
+- A successful response will return a JSON payload resembling the following structure and a HTTP Status code of 200:
+    ```json
     {
         "domain" : "starfoods.quality@v1",
         "endpoints" : [
@@ -200,15 +214,49 @@ The system will provide a ```/lookup``` route.
             "https://domain4:5080"
         ]
     }
-```
+    ```
+- A response that contains no endpoints will return a JSON payload resembling the following structure and a HTTP Status code of 404:
+    ```json
+    {
+        "domain" : "starfoods.quality@v1",
+        "endpoints" : [
+        ]
+    }
+    ```
 
 #### Requirement 5.3 - Domain Removal
-- The system will provide a ```/remove``` route, that will allow an event sink or event router to instruct the mesh network to remove a domain name and associated listener endpoints.
-The HTTP ```DELETE /remove?domain=starfoods.quality@v1```
-- The removal is scoped at the domain level, meaning that all listener and healthchecks will be deleted. There should be no trace of a domain left in the mesh network and after eventual consistency is reached. 
+- The **HTTP Server** thread will provide a ```/remove``` route, that will allow an event sink or event router to instruct the **Routing Table Manager** to remove a domain name and associated listener endpoints from it's local Routing Table or from the mesh.
+  
+The HTTP ```DELETE /remove?domain=starfoods.quality@v1&listener=https://domain1:5050&healthCheck=https://domain1:5076```
+- The removal is based a tuple containing (domain, listener, healthCheck) as part of the ```/remove``` URL. All three values in the request must be an exact match to an entry in the **Domain Endpoint Routing Table** in order for it to be removed.
 
-- The system must ensure that appropriate URL encoding is done to the HTTP DELETE request.
+- The **HTTP Server** thread needs to ensure that appropriate URL encoding is done to the HTTP DELETE request.
 
+- The **HTTP Server** will write the following data payload to the frontend channel upon receiving a  HTTP DELETE ```/remove``` request.  
+
+    ```json
+    {
+        "origin" : "HTTP",
+        "action" : "DELETE",
+        "domain" : "starfoods.quality@v1",
+        "listener" : "https://domain3:5080",
+        "healthCheck" : "https://domain3:5081",
+        "healthStatus" : ""
+    }
+    ```
+
+#### Requirement 5.4 - Health Check
+- The **HTTP Server** will provide a ```/health``` route, that will allow an external process to determine the health status of a Domain Endpoint Node.
+- The HTTP Server thread needs to ensure that appropriate URL encoding is done to the HTTP GET request.
+
+- A health state should return a HTTP Status code of 200 and a JSON response body structured like this:
+
+    ```json
+    {
+      "ok": true,
+      "status": "healthy"
+    }
+    ```
 
 ### Requirement 6 - Routing Table Manager
 
@@ -229,9 +277,9 @@ It is possible to have two event sinks listening for events for the same domain.
 
 - The healthy endpoint should return an HTTP Status code of 200 and the response body text should contain the text "healthy". An unhealthy endpoint should return an HTTP status code 503, and the text "unhealthy" in the response body.
 
-- Given that there could be two or more concurrent registrations for a domain, and that these need to be merged and propagated back into the network. It is important that every healthcheck URI is called for a domain. If a domain has two different healthcheck URI's (after a merge) then the mesh should call both healthceck URI's.
+- Given that there could be two or more concurrent registrations for a domain, and that these need to be merged and propagated back into the network. It is important that every healthCheck URI is called for a domain. If a domain has two different healthCheck URI's (after a merge) then the mesh should call both healthCheck URI's.
 
-- When a health check fails for a {listener, healthcheck} pair, it should not immediately be removed from the list of "domainUris". A numeric integer counter for the number of retries should be associated with each pair, staring with a value of zero. A user specified threshold for the maximum number of retries must be specified as a command line parameter. When an "unhealthy" status is returned from the health check, then the counter is increased by one. When the counter is either equal to or exceeds the maximum number of retries, then it is to be removed from the "domainUris" list. When a counter for a {listener, healthcheck} pair is greater than zero but has not exceeded the maximum number of retries value, and a health check returns "healthy", then the counter for the pair must be reset to zero.
+- When a health check fails for a {listener, healthCheck} pair, it should not immediately be removed from the list of "domainUris". A numeric integer counter for the number of retries should be associated with each pair, staring with a value of zero. A user specified threshold for the maximum number of retries must be specified as a command line parameter. When an "unhealthy" status is returned from the health check, then the counter is increased by one. When the counter is either equal to or exceeds the maximum number of retries, then it is to be removed from the "domainUris" list. When a counter for a {listener, healthCheck} pair is greater than zero but has not exceeded the maximum number of retries value, and a health check returns "healthy", then the counter for the pair must be reset to zero.
   
 ### Requirement 10 - Logging
 - The system should log data when:
@@ -240,7 +288,7 @@ It is possible to have two event sinks listening for events for the same domain.
       - source IP/Port of the registering node
       - the domain that it is registering
       - the list of listener URI's
-      - the list of healthchecks URI's
+      - the list of healthChecks URI's
   2. an event sink does a lookup. It should log:
       - the action being performed which is "Lookup"
       - the name of the domain it is looking for
@@ -249,13 +297,16 @@ It is possible to have two event sinks listening for events for the same domain.
       - the action being performed which is "Remove"
       - the name of the domain it removing
 
-## 5. Out of Scope (Negative Constraints)
+## 5. System Interaction
+<<Sequence Diagrams>>
+
+## 6. Out of Scope (Negative Constraints)
 - Event Router and Event Sink implementations
 - Do NOT implement persistent database storage this service only routes data
 - The management interface into the mesh is out of scope
 - The ability to retrieve all domain endpoints from the mesh is out of scope
 
-## 6. Core Domain Entities
+## 7. Core Domain Entities
 - **Event Sink:** A process that listens on an IP/Port address for incoming event data. The processing of the event itself is determined by the purpose of the event sink. For example, an event sink could receive incoming event messages and persist them to a Kafka topic. 
 
 - **Event Router:** Is an event sink, that will listen for incoming event data on and IP/Port. The event will be processed by the ruleset defined for that router.
@@ -264,5 +315,5 @@ It is possible to have two event sinks listening for events for the same domain.
 
 - **Endpoint:** Is either an IPv4 or IPv6 address inclusive of the port. The endpoint contains an actual IP address and Port.
 
-## 7. Error Handling & Edge Cases
+## 8. Error Handling & Edge Cases
 

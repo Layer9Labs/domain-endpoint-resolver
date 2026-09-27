@@ -1,3 +1,6 @@
+---
+id: d8f4cf00-2b54-48d7-84d5-0f760659f1bf
+---
 # Product Requirements Document (PRD): Domain Endpoint Resolver
 
 ## 1. System Objective
@@ -138,7 +141,6 @@ The routing table must only be updated or changed by the **Routing Table Manager
 
 The lifetime of the **Domain Endpoint Node Routing Table** is that of the **Domain Endpoint Node**. The routing table is ephemeral.
 
-
 ### Requirement 5 - HTTP Server
 
 This thread "listens" for inbound HTTP requests on an IP Address/Port that is specified on the command line.
@@ -150,7 +152,7 @@ This thread "listens" for inbound HTTP requests on an IP Address/Port that is sp
 
 - The **HTTP Server** thread needs to ensure that appropriate URL encoding is done to the HTTP POST request.
 
-- This is an HTTP POST, with the following register message payload format:
+- This is an HTTP POST, with the following incoming register message payload format:
     ```json
     [
         {
@@ -182,7 +184,89 @@ This thread "listens" for inbound HTTP requests on an IP Address/Port that is sp
     ]
     ```
 
-Upon receipt of this payload, the **HTTP Server** thread will iterate through the list of domains in the **Domain Endpoint Routing Table** and create a list of Channel Payload Format records and write them serially to the frontend communication channel.
+- Upon receipt of this payload, the **HTTP Server** thread will convert the incoming JSON format to a list of **Channel Payload Format** HTTP INSERT data that will be written to the frontend channel.
+
+    Below is a JSON example of what the payload data could look like.
+
+  ```json
+    [
+      {
+        "origin" : "HTTP",
+        "action" : "INSERT",
+        "domain" : "starfoods.food@v1",
+        "listener" : "https://domain1:5050",
+        "healthCheck" : "https://domain1:5076",
+        "healthStatus" : ""
+      },
+      {
+        "origin" : "HTTP",
+        "action" : "INSERT",
+        "domain" : "starfoods.food@v1",
+        "listener" : "https://domain1:5051",
+        "healthCheck" : "https://domain1:5077",
+        "healthStatus" : ""
+      },
+      {
+        "origin" : "HTTP",
+        "action" : "INSERT",
+        "domain" : "starfoods.quality@v1",
+        "listener" : "https://domain1:5060",
+        "healthCheck" : "https://domain1:5061",
+        "healthStatus" : ""
+      },
+      {
+        "origin" : "HTTP",
+        "action" : "INSERT",
+        "domain" : "starfoods.quality@v1",
+        "listener" : "https://domain1:5080",
+        "healthCheck" : "https://domain1:5081",
+        "healthStatus" : ""
+      }
+    ]
+    ```
+
+- The **HTTP Server** thread will iterate through the list of records and write them serially to the frontend communication channel. 
+
+<!-- [MermaidChart: 82858c24-5cb6-4d59-a300-b8a84f22a187] -->
+
+```mermaid
+sequenceDiagram
+    participant ES as Event Sink
+    participant MT as Main Thread
+    participant HTTP as HTTP Server
+    participant FE@{ "type": "queue" } as Frontend Channel
+    participant RTM as Routing Table Manager
+    participant DERT@{ "type": "entity" } as Domain Endpoint Routing Table
+    participant BE@{ "type": "queue" } as Backend Channel
+    participant GC as Gossip Coordinator
+    participant HH as Health Heartbeat
+
+    MT->>MT: Start HTTP Server Thread
+    MT->>MT: Start Routing Table Manager Thread
+    MT->>MT: Start Gossip Coordinator Thread
+    MT->>MT: Start Health Heartbeat Thread
+    ES->>+HTTP: HTTP POST /register
+    par
+      activate HTTP
+      HTTP->>HTTP: Convert JSON to Wire Payload Format
+      loop
+        HTTP->>+FE: Write message(s)
+    end
+      loop
+        FE->>RTM: Read message
+        RTM->>RTM: Check for Duplicate Entries
+        RTM->>DERT: Update Domain Routing Table
+      end
+        RTM-->>FE: Registration confirmed
+        FE-->>-HTTP: Registration confirmed
+        HTTP-->>-ES: 200 OK
+      deactivate HTTP
+    and
+      activate RTM
+
+      deactivate RTM
+    end
+```
 
 #### Requirement 5.2 - Domain Lookup
 
@@ -316,4 +400,3 @@ It is possible to have two event sinks listening for events for the same domain.
 - **Endpoint:** Is either an IPv4 or IPv6 address inclusive of the port. The endpoint contains an actual IP address and Port.
 
 ## 8. Error Handling & Edge Cases
-

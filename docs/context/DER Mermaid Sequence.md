@@ -113,3 +113,30 @@ sequenceDiagram
 
 *Source: Technical Brief — Event Network Architecture (ENA), sections 7.1 Domain Endpoint
 Resolver (DER), 7.2 Event Network and Sidecars, and 7.3 Dynamic Discovery.*
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Actor as Thread 1
+    participant Actor2 as Thread 2
+    participant Actor3 as Thread 3
+    participant Actor4 as Thread 4
+
+    par Actor 1 Work
+        activate Actor
+        Actor->>Actor: Process Task A
+        deactivate Actor
+    and Actor 2 Work
+        activate Actor2
+        Actor2->>Actor2: Process Task B
+        deactivate Actor2
+    and Actor 3 Work
+        activate Actor3
+        Actor3->>Actor3: Process Task C
+        deactivate Actor3
+    and Actor 4 Work
+        activate Actor4
+        Actor4->>Actor4: Process Task D
+        deactivate Actor4
+    end
+```

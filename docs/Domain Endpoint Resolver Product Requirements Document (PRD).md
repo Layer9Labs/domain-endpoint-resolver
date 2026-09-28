@@ -213,6 +213,35 @@ An example JSON payload:
 ```
 
 #### Requirement 5.2 - Domain Lookup
+When an Event Router or Sink needs to obtain the IP Address/Port for a specific domain, it needs t query the mesh network through one of the Domain Endpoint Nodes in the mesh by calling the ```/lookup``` API. The lookup API
+
+- The **Event Sink of Router** will query for a domain by issuing a HTTP GET request. If for example, the event router wanted to know the IP Address/Port for the **starfoods.quality@v1** domain, issue a HTTP GET request against the DOmain Endpoint Node's HTTP server address, using the following parameters : ```/lookup?domain=starfoods.quality@v1```.
+
+- If the domain is found then mesh network, then the following json payload will be returned to the **Event Sink of Router**:
+
+```json
+{
+  "domainName" : "starfoods.quality@v1",
+  "domainUris" : [
+      {
+        "listener" : "https://domain2:5060",
+        "healthCheck" : "https://domain2:5061"
+      },
+      {
+      "listener" : "https://domain3:5080",
+      "healthCheck" : "https://domain3:5081"
+      }
+  ]
+}
+```
+- If the domain is not found then the following json payload  will be returned to the **Event Sink of Router**:
+
+```json
+{
+  "domainName" : "starfoods.quality@v1",
+  "domainUris" : []
+}
+```
 
 #### Requirement 5.3 - Domain Removal
 
@@ -229,7 +258,7 @@ This thread "listens" for inbound HTTP requests on an IP Address/Port that is sp
 
 - The **HTTP Server** thread needs to ensure that appropriate URL encoding is done to the HTTP POST request.
 
-- Upon receipt of HTTP POST message, the **HTTP Server** thread will convert the incoming JSON format to the Data Transfer Object (DTO) ```DomainRegistryList``` defined below. 
+- Upon receipt of HTTP POST message, the **HTTP Server** thread will convert the incoming JSON format to the Data Transfer Object (DTO) ```DomainEndpointList``` defined below. 
   
   ```rust
     use serde::{Deserialize, Serialize};
@@ -250,7 +279,7 @@ This thread "listens" for inbound HTTP requests on an IP Address/Port that is sp
     }
 
     // Your full array type is a Vec<DomainConfig>
-    pub type DomainRegistryList = Vec<DomainConfig>;
+    pub type DomainEndpointList = Vec<DomainConfig>;
     ```
 - Once converted to the DTO, the **HTTP Server** thread will convert the incoming JSON format to a list of ```ChannelMessage``` assigning the "origin" the value of ```Http``` and the ```action``` field the value of ```Insert```, then mapping the ```domain```, ```listener``` and ```health_check``` fields with their corresponding values from the DTO. 
 - Once converted, each ```ChannelMessage``` in the list is written to the the frontend channel.
@@ -261,7 +290,7 @@ This thread "listens" for inbound HTTP requests on an IP Address/Port that is sp
 - The **Gossip Coordinator** will read each ```ChannelMessage``` from the backend channel as it becomes available.
 - The **Gossip Coordinator** will publish each ```ChannelMessage``` to ```saorsa-gossip``` where the ```saorsa-gossip``` will ensure that duplicate domains are merged if the ```listener``` and ```health_check``` do not already exist in the mesh, otherwise the duplicate value is discarded.
 
-  The interaction between elements of the architecture for this requirement is depicted below:
+#### Register Sequence Diagram
 ```mermaid
 sequenceDiagram
     participant ES as Event Sink
@@ -318,8 +347,8 @@ sequenceDiagram
 
   ```json
   {
-    "origin" : "HTTP",
-    "action" : "LOOKUP",
+    "origin" : "Http",
+    "action" : "Lookup",
     "domain" : "starfoods.food@v1",
     "listener" : "",
     "healthCheck" : "",
@@ -347,6 +376,33 @@ sequenceDiagram
         ]
     }
     ```
+#### Lookup Sequence Diagram
+```mermaid
+sequenceDiagram
+    participant ES as Event Sink
+    participant DEN as Domain Endpoint Node Process
+    participant HTTP as HTTP Server
+    participant FE@{ "type": "queue" } as Frontend Channel
+    participant RTM as Routing Table Manager
+    participant DERT@{ "type": "entity" } as DomainEndpointRoutingTable
+    participant BE@{ "type": "queue" } as Backend Channel
+    participant GC as Gossip Coordinator
+    participant SG as soarsa-gossip
+
+    DEN->>DEN: Start HTTP Server Thread
+    DEN->>DEN: Start Routing Table Manager Thread
+    DEN->>DEN: Start Gossip Coordinator Thread
+    DEN->>DEN: Start Health Heartbeat Thread
+    ES->>+HTTP: HTTP POST /lookup
+    par
+      activate HTTP
+      HTTP->>HTTP: Convert JSON to ChannelMessage
+      HTTP->>+FE: Write ChannelMessage
+      deactivate HTTP
+    end
+
+```
+
 
 #### Requirement 6.3 - Domain Removal
 - The **HTTP Server** thread will provide a ```/remove``` route, that will allow an event sink or event router to instruct the **Routing Table Manager** to remove a domain name and associated listener endpoints from it's local Routing Table or from the mesh.

@@ -1,0 +1,23 @@
+sequenceDiagram
+    participant ES as Event Sink
+    participant DEN as Domain Endpoint Node Process
+    participant HTTP as HTTP Server
+    participant FE@{ "type": "queue" } as Frontend Channel
+    participant RTM as Routing Table Manager
+    participant DERT@{ "type": "entity" } as DomainEndpointRoutingTable
+    participant BE@{ "type": "queue" } as Backend Channel
+    participant GC as Gossip Coordinator
+    participant SG as soarsa-gossip
+
+    DEN->>DEN: Start HTTP Server Thread
+    DEN->>DEN: Start Routing Table Manager Thread
+    DEN->>DEN: Start Gossip Coordinator Thread
+    DEN->>DEN: Start Health Heartbeat Thread
+    ES->>+HTTP: HTTP POST /lookup
+    par
+      activate HTTP
+      HTTP->>HTTP: Convert JSON to ChannelMessage
+      HTTP->>+FE: Write ChannelMessage
+      deactivate HTTP
+    end
+

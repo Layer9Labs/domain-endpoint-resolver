@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant ES as Event Sink
+    participant DEN as Domain Endpoint Node Process
+    participant HTTP as HTTP Server
+    participant FE@{ "type": "queue" } as Frontend Channel
+    participant RTM as Routing Table Manager
+    participant DERT@{ "type": "entity" } as DomainEndpointRoutingTable
+    participant BE@{ "type": "queue" } as Backend Channel
+    participant GC as Gossip Coordinator
+    participant SG as soarsa-gossip
+    participant HH as Health Heartbeat
+
+    DEN->>DEN: Start HTTP Server Thread
+    DEN->>DEN: Start Routing Table Manager Thread
+    DEN->>DEN: Start Gossip Coordinator Thread
+    DEN->>DEN: Start Health Heartbeat Thread
+    ES->>+HTTP: HTTP POST /register
+    par
+      activate HTTP
+      HTTP->>HTTP: Convert JSON to ChannelMessage
+      loop
+        HTTP->>+FE: Write ChannelMessage
+      end
+      deactivate HTTP
+    and
+      activate RTM
+      loop
+        FE->>RTM: Read ChannelMessage
+        RTM->>RTM: Check for Duplicate Entries
+        RTM->>DERT: Update DomainEndpointRoutingTable
+        RTM->>BE: Write ChannelMessage
+      end
+        RTM-->>FE: Registration confirmed
+        FE-->>-HTTP: Registration confirmed
+        HTTP-->>-ES: 200 OK
+      deactivate RTM
+    and
+      activate GC
+      loop
+        BE->>GC: Read ChannelMessage
+        GC->>SG: Publish ChannelMessage
+      end
+      deactivate GC
+    end

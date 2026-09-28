@@ -14,6 +14,7 @@ The following diagram defines the structural element and communication paths bet
 
 There are five components or elements that comprises a Domain Endpoint Node:
 
+
 1. **HTTP Server** execution thread using tokio-quiche that exposes four HTTP routes as an API surface. There are:
    - ```/register```
    - ```/health```
@@ -51,30 +52,41 @@ Communication with the **Routing Table Manager** thread is done via a channel.
   - quiche + tokio-quiche
   - rmp
   - tracing
+  - serde
+  - url
 
 ## 4. Functional Requirements
 
-### Requirement 1 - Channel Payload Format
+### Requirement 1 - ChannelMessage Structure
 
-The data that is written and read from the communication frontend and backend channels between the **HTTP Server** thread and the **Routing Table Manager** thread, between the **Routing Table Manager** and the **Gossip Coordinator** thread, and between the **Health Heartbeat** thread and the **Routing Table Manager** thread should conform to the following structure:
+The data that is written and read from the communication frontend and backend channels between the **HTTP Server** thread and the **Routing Table Manager** thread, between the **Routing Table Manager** and the **Gossip Coordinator** thread, and between the **Health Heartbeat** thread and the **Routing Table Manager** thread should conform to the following Rust definitions:
 
-- A member named "origin" that is an enumerated type that can take one of two values 1) HTTP 2) HEALTH.
-- A member named "action" that is an enumerated type that can take one of several values 1) ADD 2) REMOVE 3) UPDATE 4) LOOKUP
-- A member named "domain" that is a string containing the fully qualified domain name
-- A member named "listener" that is the listening endpoint for the event sink that is being inserted, updated or removed.
-- A member named "healthCheck" that is the health check URI for the event sink that is being inserted, updated or removed.
-- A member named "healthCheck" that is the health check status that would be return by the healthCheck endpoint.
+```rust
+use serde::{Deserialize, Serialize};
 
-Below is a JSON example of what the payload data could look like.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OriginType {
+    Http,
+    Health,
+}
 
-```json
-{
-    "origin" : "HTTP",
-    "action" : "INSERT",
-    "domain" : "starfoods.food@v1",
-    "listener" : "https://domain1:5050",
-    "healthCheck" : "https://domain1:5076",
-    "healthStatus" : "healthy"
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ActionType {
+    Add,
+    Remove,
+    Update,
+    Lookup,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelMessage {
+    pub origin: OriginType,
+    pub action: ActionType,
+    pub domain: String,
+    pub listener: Url,
+    pub health_check: Url,
+    pub health_status: String,
 }
 ```
 
@@ -88,15 +100,27 @@ Below is a JSON example of what the payload data could look like.
 
 - Inter-node gossip traffic should rely on what is provided by the saorsa-gossip crate.
 
-### Requirement 4 - Domain Endpoint Node Routing Table:
+### Requirement 4 - Domain Endpoint Routing Table:
 The Domain Endpoint Node Routing Table is an in-memory data store with no persistence capabilities. 
 
-The structure of the routing table is a dictionary where the key is the fully qualified domain name, and the values for the key includes the following members/fields/elements:
-- **"listener"** a string representing the IP/Port address at which the event sink will listen for incoming events.
-- **healthCheck** a string representing the health check URI of the event sink. This implies that an event sink should expose a health check route.
-- **healthCounter** an integer value, initially zero, but a counter of the number of times a health check has failed.
-- **healthStatus** a string representing the health status of the "listener".
-- **isLocalEntry** a boolean value indicating whether or not the entry in the Router Table is one that was registered by an event sink, or if the entry was obtained from a mesh lookup.
+```rust
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingTableData {
+    pub listener: Url,
+    pub health_check: Url,
+    pub health_counter: i32,
+    pub health_status: String,
+    pub is_local_entry: bool,
+}
+
+// Type alias representing the dictionary of domain names to their records
+pub type DomainEndpointRoutingTable = HashMap<String, Vec<RoutingTableData>>;
+```
 
 Outlined below is a JSON example of what the payload of the routing table could be.
 
@@ -137,138 +161,154 @@ Outlined below is a JSON example of what the payload of the routing table could 
     }
 ```
 
-The routing table must only be updated or changed by the **Routing Table Manager** thread, however the **Health Heartbeat** thread will need to have read access to the **Domain Endpoint Node Routing Table**. This means that both threads will need a reference to the routing table in order to either update it, or to be able to read the contents.
+- The ```DomainEndpointRoutingTable``` must only be updated or changed by the **Routing Table Manager** thread, however the **Health Heartbeat** thread will need to have read access to the ```DomainEndpointRoutingTable```. This means that both threads will need a reference to the ```DomainEndpointRoutingTable```. For the **Health Heartbeat** thread this is a only access whereas for the **Routing Table Manager** it needs to read/write access.
 
-The lifetime of the **Domain Endpoint Node Routing Table** is that of the **Domain Endpoint Node**. The routing table is ephemeral.
+- The lifetime of the ``DomainEndpointRoutingTable`` is that of the **Domain Endpoint Node**, consequently, the routing table is ephemeral and lives for the duration of the **Domain Endpoint Node**.
 
-### Requirement 5 - HTTP Server
+### Requirement 5 - Event Sink
+An Event Sink interacts with the Domain Endpoint or Mesh Node via a REST API. 
+These are:
+   - ```/register```
+   - ```/health```
+   - ```/lookup```
+   - ```/remove```
+
+#### Requirement 5.1 - Endpoint Registration:
+
+When an Event Sink wished to be discovered by the mesh network, it needs to register its listening and health check URI's and the domains that it can accept event messages for.
+
+An Event Sink will register the domains, by calling the ```/register``` for an IP Address/Port of a Domain Endpoint Node. The ```/register``` endpoint is an HTTP POST.
+
+An example JSON payload:
+
+```json
+  [
+    {
+        "domainName" : "starfoods.food@v1",
+        "domainUris" : [
+          {
+            "listener" : "https://domain1:5050",
+            "healthCheck" : "https://domain1:5076"
+          },
+          {
+            "listener" : "https://domain1:5051",
+            "healthCheck" : "https://domain1:5077"
+          }
+        ]
+    },
+    {
+        "domainName" : "starfoods.quality@v1",
+        "domainUris" : [
+          {
+            "listener" : "https://domain2:5060",
+            "healthCheck" : "https://domain2:5061"
+          },
+          {
+            "listener" : "https://domain3:5080",
+            "healthCheck" : "https://domain3:5081"
+          }
+        ]
+      }
+  ]
+```
+
+#### Requirement 5.2 - Domain Lookup
+
+#### Requirement 5.3 - Domain Removal
+
+#### Requirement 5.4 - Health Check
+
+### Requirement 6 - HTTP Server
 
 This thread "listens" for inbound HTTP requests on an IP Address/Port that is specified on the command line.
 
-#### Requirement 5.1 - Endpoint Registration:
-- The **HTTP Server** thread will provide a ```/register``` route, that will allow an event sink or event router to register listener and healthCheck endpoint information with a Domain Endpoint Node or mesh node.
+#### Requirement 6.1 - Endpoint Registration:
+- The **HTTP Server** thread will provide a ```/register``` API route, that will allow an event sink or event router to register listener and healthCheck endpoint information for a domain in the Mesh.
 
-- An event sink can register multiple domains, where each domain must contain one or more listeners. 
+- An event sink can register multiple domains, where each domain must contain one or more listeners and health check URI. 
 
 - The **HTTP Server** thread needs to ensure that appropriate URL encoding is done to the HTTP POST request.
 
-- This is an HTTP POST, with the following incoming register message payload format:
-    ```json
-    [
-        {
-            "domainName" : "starfoods.food@v1",
-            "domainUris" : [
-              {
-                "listener" : "https://domain1:5050",
-                "healthCheck" : "https://domain1:5076"
-              },
-              {
-                "listener" : "https://domain1:5051",
-                "healthCheck" : "https://domain1:5077"
-              }
-            ]
-        },
-        {
-            "domainName" : "starfoods.quality@v1",
-            "domainUris" : [
-              {
-                "listener" : "https://domain2:5060",
-                "healthCheck" : "https://domain2:5061"
-              },
-              {
-                "listener" : "https://domain3:5080",
-                "healthCheck" : "https://domain3:5081"
-              }
-            ]
-        }
-    ]
+- Upon receipt of HTTP POST message, the **HTTP Server** thread will convert the incoming JSON format to the Data Transfer Object (DTO) ```DomainRegistryList``` defined below. 
+  
+  ```rust
+    use serde::{Deserialize, Serialize};
+    use url::Url;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DomainUri {
+        pub listener: Url,
+        pub health_check: Url,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DomainConfig {
+        pub domain_name: String,
+        pub domain_uris: Vec<DomainUri>,
+    }
+
+    // Your full array type is a Vec<DomainConfig>
+    pub type DomainRegistryList = Vec<DomainConfig>;
     ```
+- Once converted to the DTO, the **HTTP Server** thread will convert the incoming JSON format to a list of ```ChannelMessage``` assigning the "origin" the value of ```Http``` and the ```action``` field the value of ```Insert```, then mapping the ```domain```, ```listener``` and ```health_check``` fields with their corresponding values from the DTO. 
+- Once converted, each ```ChannelMessage``` in the list is written to the the frontend channel.
 
-- Upon receipt of this payload, the **HTTP Server** thread will convert the incoming JSON format to a list of **Channel Payload Format** HTTP INSERT data that will be written to the frontend channel.
+- The **Routing Table Manager** will read each ```ChannelMessage``` from the frontend channel as it becomes available.
+- The **Routing Table Manager** will update the ```DomainEndpointRoutingTable``` with the domain registration data, ensuring that no duplicates exists within the ```DomainEndpointRoutingTable```.
+- The **Routing Table Manager** will write each ```ChannelMessage``` to the backend channel.
+- The **Gossip Coordinator** will read each ```ChannelMessage``` from the backend channel as it becomes available.
+- The **Gossip Coordinator** will publish each ```ChannelMessage``` to ```saorsa-gossip``` where the ```saorsa-gossip``` will ensure that duplicate domains are merged if the ```listener``` and ```health_check``` do not already exist in the mesh, otherwise the duplicate value is discarded.
 
-    Below is a JSON example of what the payload data could look like.
-
-  ```json
-    [
-      {
-        "origin" : "HTTP",
-        "action" : "INSERT",
-        "domain" : "starfoods.food@v1",
-        "listener" : "https://domain1:5050",
-        "healthCheck" : "https://domain1:5076",
-        "healthStatus" : ""
-      },
-      {
-        "origin" : "HTTP",
-        "action" : "INSERT",
-        "domain" : "starfoods.food@v1",
-        "listener" : "https://domain1:5051",
-        "healthCheck" : "https://domain1:5077",
-        "healthStatus" : ""
-      },
-      {
-        "origin" : "HTTP",
-        "action" : "INSERT",
-        "domain" : "starfoods.quality@v1",
-        "listener" : "https://domain1:5060",
-        "healthCheck" : "https://domain1:5061",
-        "healthStatus" : ""
-      },
-      {
-        "origin" : "HTTP",
-        "action" : "INSERT",
-        "domain" : "starfoods.quality@v1",
-        "listener" : "https://domain1:5080",
-        "healthCheck" : "https://domain1:5081",
-        "healthStatus" : ""
-      }
-    ]
-    ```
-
-- The **HTTP Server** thread will iterate through the list of records and write them serially to the frontend communication channel. 
-
-<!-- [MermaidChart: 82858c24-5cb6-4d59-a300-b8a84f22a187] -->
-
+  The interaction between elements of the architecture for this requirement is depicted below:
 ```mermaid
 sequenceDiagram
     participant ES as Event Sink
-    participant MT as Main Thread
+    participant DEN as Domain Endpoint Node Process
     participant HTTP as HTTP Server
     participant FE@{ "type": "queue" } as Frontend Channel
     participant RTM as Routing Table Manager
-    participant DERT@{ "type": "entity" } as Domain Endpoint Routing Table
+    participant DERT@{ "type": "entity" } as DomainEndpointRoutingTable
     participant BE@{ "type": "queue" } as Backend Channel
     participant GC as Gossip Coordinator
-    participant HH as Health Heartbeat
+    participant SG as soarsa-gossip
 
-    MT->>MT: Start HTTP Server Thread
-    MT->>MT: Start Routing Table Manager Thread
-    MT->>MT: Start Gossip Coordinator Thread
-    MT->>MT: Start Health Heartbeat Thread
+    DEN->>DEN: Start HTTP Server Thread
+    DEN->>DEN: Start Routing Table Manager Thread
+    DEN->>DEN: Start Gossip Coordinator Thread
+    DEN->>DEN: Start Health Heartbeat Thread
     ES->>+HTTP: HTTP POST /register
     par
       activate HTTP
-      HTTP->>HTTP: Convert JSON to Wire Payload Format
+      HTTP->>HTTP: Convert JSON to ChannelMessage
       loop
-        HTTP->>+FE: Write message(s)
-    end
+        HTTP->>+FE: Write ChannelMessage
+      end
+      deactivate HTTP
+    and
+      activate RTM
       loop
-        FE->>RTM: Read message
+        FE->>RTM: Read ChannelMessage
         RTM->>RTM: Check for Duplicate Entries
-        RTM->>DERT: Update Domain Routing Table
+        RTM->>DERT: Update DomainEndpointRoutingTable
+        RTM->>BE: Write ChannelMessage
       end
         RTM-->>FE: Registration confirmed
         FE-->>-HTTP: Registration confirmed
         HTTP-->>-ES: 200 OK
-      deactivate HTTP
-    and
-      activate RTM
-
       deactivate RTM
+    and
+      activate GC
+      loop
+        BE->>GC: Read ChannelMessage
+        GC->>SG: Publish ChannelMessage
+      end
+      deactivate GC
     end
 ```
 
-#### Requirement 5.2 - Domain Lookup
+#### Requirement 6.2 - Domain Lookup
 
 - The **HTTP Server** thread will provide a ```/lookup``` route to enable an event sink or event router to query the mesh node to look up the endpoint address or addresses for a given domain.
 
@@ -308,7 +348,7 @@ sequenceDiagram
     }
     ```
 
-#### Requirement 5.3 - Domain Removal
+#### Requirement 6.3 - Domain Removal
 - The **HTTP Server** thread will provide a ```/remove``` route, that will allow an event sink or event router to instruct the **Routing Table Manager** to remove a domain name and associated listener endpoints from it's local Routing Table or from the mesh.
   
 The HTTP ```DELETE /remove?domain=starfoods.quality@v1&listener=https://domain1:5050&healthCheck=https://domain1:5076```
@@ -329,7 +369,7 @@ The HTTP ```DELETE /remove?domain=starfoods.quality@v1&listener=https://domain1:
     }
     ```
 
-#### Requirement 5.4 - Health Check
+#### Requirement 6.4 - Health Check
 - The **HTTP Server** will provide a ```/health``` route, that will allow an external process to determine the health status of a Domain Endpoint Node.
 - The HTTP Server thread needs to ensure that appropriate URL encoding is done to the HTTP GET request.
 
@@ -342,7 +382,7 @@ The HTTP ```DELETE /remove?domain=starfoods.quality@v1&listener=https://domain1:
     }
     ```
 
-### Requirement 6 - Routing Table Manager
+### Requirement 7 - Routing Table Manager
 
 It is possible to have two event sinks listening for events for the same domain. In the mesh network there should be single representation of all domain nodes and they respective health checks.
 
@@ -350,13 +390,13 @@ It is possible to have two event sinks listening for events for the same domain.
 
 - Given that there could be multiple "listener" and "healthCheck" URI's for a given domain, when a healthCheck fails, the healthCheck's corresponding listener and healthCheck URI should be removed from the list of "domainUris" URI's for the given domain. There is a 1:1 relationship between the "listener" URI and it's healthCheck endpoint. When the healthCheck is removed because of a failure, so should the listener entry for that healthCheck.
 
-### Requirement 7 - Gossip Coordinator
+### Requirement 8 - Gossip Coordinator
 
 
 ### Requirement 8 - Health Heartbeat
 
 
-### Requirement 9 - Health Check
+### Requirement 10 - Health Check
 - On a user specified periodic basis, via a command line parameter setting, the mesh node should make a call to the health check URI's that was provided as part or the ```/Register``` call, to determine if the event sink or router is healthy. If the event sink or router returns an unhealthy state, the mesh node should remove the endpoint for the domain it belongs to.
 
 - The healthy endpoint should return an HTTP Status code of 200 and the response body text should contain the text "healthy". An unhealthy endpoint should return an HTTP status code 503, and the text "unhealthy" in the response body.
@@ -365,7 +405,7 @@ It is possible to have two event sinks listening for events for the same domain.
 
 - When a health check fails for a {listener, healthCheck} pair, it should not immediately be removed from the list of "domainUris". A numeric integer counter for the number of retries should be associated with each pair, staring with a value of zero. A user specified threshold for the maximum number of retries must be specified as a command line parameter. When an "unhealthy" status is returned from the health check, then the counter is increased by one. When the counter is either equal to or exceeds the maximum number of retries, then it is to be removed from the "domainUris" list. When a counter for a {listener, healthCheck} pair is greater than zero but has not exceeded the maximum number of retries value, and a health check returns "healthy", then the counter for the pair must be reset to zero.
   
-### Requirement 10 - Logging
+### Requirement 11 - Logging
 - The system should log data when:
   1.  an event sink registers with the mesh network. It should log:
       - the action being performed which is "Registration"

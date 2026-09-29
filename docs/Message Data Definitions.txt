@@ -1,0 +1,139 @@
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainUri {
+    pub listener: Url,
+    pub health_check: Url,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainConfig {
+    pub domain_name: String,
+    pub domain_uris: Vec<DomainUri>,
+}
+      
+pub type DomainEndpoints = Vec<DomainConfig>;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddMessage {
+    pub domain_endpoints: DomainEndpoints,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveMessage {
+    pub domain: String,
+    pub listener: Url,
+    pub health_check: Url,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMessage {
+    pub domain: String,
+    pub listener: Url,
+    pub health_check: Url,
+    pub health_status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LookupMessage {
+    pub domain: String,
+}
+
+// --- THE DISCRIMINATED UNION ---
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "messageType", rename_all = "camelCase")]
+pub enum ChannelMessage {
+    Add(AddMessage),
+    Remove(RemoveMessage),
+    Update(UpdateMessage),
+    Lookup(LookupMessage),
+}
+
+// --- Channel Worker / Consumer Logic ---
+
+/// The background worker that owns the Receiver half of the channel.
+/// It processes each incoming ChannelMessage sequentially.
+async fn run_message_processor(mut rx: mpsc::Receiver<ChannelMessage>) {
+    println!("[Processor] Worker started. Awaiting messages...");
+    
+    while let Some(message) = rx.recv().await {
+        match message {
+            ChannelMessage::Add(msg) => {
+                println!("[Processor] Handling ADD message for {} domains", msg.domain_endpoints.len());
+            }
+            ChannelMessage::Remove(msg) => {
+                println!("[Processor] Handling REMOVE message for domain: {}", msg.domain);
+            }
+            ChannelMessage::Update(msg) => {
+                println!(
+                    "[Processor] Handling UPDATE message for domain: {}. Status is now: {}", 
+                    msg.domain, msg.health_status
+                );
+            }
+            ChannelMessage::Lookup(msg) => {
+                println!("[Processor] Handling LOOKUP message for domain: {}", msg.domain);
+            }
+            ChannelMessage::Health(msg) => {
+                println!("[Processor] Handling HEALTH check for domain: {}", msg.domain);
+            }
+        }
+    }
+    println!("[Processor] Channel closed. Worker shutting down.");
+}
+
+// --- Main Runtime Orchestration ---
+
+#[tokio::main]
+async fn main() {
+    // 1. Create a bounded channel. Capacity of 32 messages prevents memory spikes.
+    let (tx, rx) = mpsc::channel::<ChannelMessage>(32);
+
+    // 2. Spawn the background message processor thread/task
+    let processor_handle = tokio::spawn(run_message_processor(rx));
+
+    // 3. Simulate incoming JSON payloads from a web hook, API gateway, or socket
+    let sample_update_json = r#"{
+        "action": "update",
+        "domain": "example.com",
+        "listener": "https://example.com",
+        "healthCheck": "https://example.com/health",
+        "healthStatus": "unhealthy"
+    }"#;
+
+    let sample_lookup_json = r#"{
+        "action": "lookup",
+        "domain": "internal.service"
+    }"#;
+
+    // 4. Clone the sender to simulate different producer components or threads
+    let tx1 = tx.clone();
+    let tx2 = tx.clone();
+
+    // Producer Task 1: Parses and sends an Update message
+    tokio::spawn(async move {
+        if let Ok(msg) = serde_json::from_str::<ChannelMessage>(sample_update_json) {
+            tx1.send(msg).await.unwrap();
+        }
+    });
+
+    // Producer Task 2: Parses and sends a Lookup message
+    tokio::spawn(async move {
+        if let Ok(msg) = serde_json::from_str::<ChannelMessage>(sample_lookup_json) {
+            tx2.send(msg).await.unwrap();
+        }
+    });
+
+    // Drop the original main thread sender so the channel closes when producers complete
+    drop(tx);
+
+    // Wait for the background processor to finish processing all items in queue
+    let _ = processor_handle.await;
+}

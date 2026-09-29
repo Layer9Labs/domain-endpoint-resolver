@@ -8,17 +8,16 @@ To build a fault-tolerant, resilient and scalable Rust-based distributed mesh ne
 
 ## 2. Architectural Elements
 
-The following diagram defines the structural element and communication paths between the elements that make up the Domain Endpoint Node.
+The following diagram defines the structural element and communication paths between the elements that constitutes a Domain Endpoint Node.
 
 ![Domain Endpoint Node](<Domain EndPoint Node.svg>)
-
-There are five components or elements that comprises a Domain Endpoint Node:
 
 
 1. **HTTP Server** execution thread using tokio-quiche that exposes four HTTP routes as an API surface. There are:
    - ```/register```
    - ```/health```
    - ```/lookup```
+   - ```/update```
    - ```/remove```
 
     This thread communicates with downstream threads via a channel.

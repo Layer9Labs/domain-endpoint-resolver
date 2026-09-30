@@ -56,51 +56,89 @@ Communication with the **Routing Table Manager** thread is done via a channel.
 
 ## 4. Functional Requirements
 
-### Requirement 1 - ChannelMessage Structure
+### Requirement 1 - Channel Data Structure
 
-The data that is written and read from the communication frontend and backend channels between the **HTTP Server** thread and the **Routing Table Manager** thread, between the **Routing Table Manager** and the **Gossip Coordinator** thread, and between the **Health Heartbeat** thread and the **Routing Table Manager** thread should conform to the following Rust definitions:
+The following enum and data structure define the structure of what will be written to an read from the backend and frontend channels. Unless otherwise stated, these data structure definitions should be used for both inter and intra process communications. 
 
+#### Rust Data Structures
 ```rust
 use serde::{Deserialize, Serialize};
+use url::Url;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum OriginType {
-    Http,
-    Health,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ActionType {
-    Add,
-    Remove,
-    Update,
-    Lookup,
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainUri {
+    pub listener: Url,
+    pub health_check: Url,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChannelMessage {
-    pub origin: OriginType,
-    pub action: ActionType,
+pub struct DomainConfig {
+    pub domain_name: String,
+    pub domain_uris: Vec<DomainUri>,
+}
+      
+pub type DomainEndpoints = Vec<DomainConfig>;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddMessage {
+    pub domain_endpoints: DomainEndpoints,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveMessage {
+    pub domain: String,
+    pub listener: Url,
+    pub health_check: Url,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMessage {
     pub domain: String,
     pub listener: Url,
     pub health_check: Url,
     pub health_status: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LookupMessage {
+    pub domain: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultMessage {
+    pub domain_endpoints: DomainEndpoints,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "messageType", rename_all = "camelCase")]
+pub enum ChannelMessage {
+    Add(AddMessage),
+    Remove(RemoveMessage),
+    Update(UpdateMessage),
+    Lookup(LookupMessage),
+    Result(ResultMessage),
+}
 ```
 
 ### Requirement 2 - Data Serialization
-- All data sent across the channels between threads, must be serialized into a binary format using messagepack. The **Gossip Coordinator** thread node will deserialize the data and then propagate the data through the mesh network.
+- Data All data sent to and from the **HTTP Server** must be serialized and deserialized into a binary format using messagepack.
 
 - All data sent from a mesh node to a event sink or router must not be serialized with messagepack.
 
 ### Requirement 3 - Encrypted Payload
-- The system must provide the ability to encrypt the payload data whilst in transit over a network. The system will provide a command line argument specifying the certificate and key that is to be used in encrypting payload data. This is inherently provided by HTTP/3 TLS 1.3 or greater.**
-
-- Inter-node gossip traffic should rely on what is provided by the saorsa-gossip crate.
+- The system must provide the ability to encrypt the payload data whilst in transit over a network, primarily between an Event Sink/Router or and the **HTTP Server**. The system will provide a command line argument specifying the certificate and key that is to be used in encrypting payload data. To be used by HTTP/3 or HTTP/2 Fallback TLS 1.3 or greater.
 
 ### Requirement 4 - Domain Endpoint Routing Table:
 The Domain Endpoint Node Routing Table is an in-memory data store with no persistence capabilities. 
+
+Use the following Rust code snippet to represent the in-memory data store:
 
 ```rust
 use std::collections::HashMap;
@@ -160,7 +198,7 @@ Outlined below is a JSON example of what the payload of the routing table could 
     }
 ```
 
-- The ```DomainEndpointRoutingTable``` must only be updated or changed by the **Routing Table Manager** thread, however the **Health Heartbeat** thread will need to have read access to the ```DomainEndpointRoutingTable```. This means that both threads will need a reference to the ```DomainEndpointRoutingTable```. For the **Health Heartbeat** thread this is a only access whereas for the **Routing Table Manager** it needs to read/write access.
+- The ```DomainEndpointRoutingTable``` must only be updated or changed by the **Routing Table Manager** thread, however the **Health Heartbeat** thread will need to have read access to the ```DomainEndpointRoutingTable```. This means that both threads will need a reference to the ```DomainEndpointRoutingTable```. For the **Health Heartbeat** thread this is read-only access whereas for the **Routing Table Manager** it needs to read/write access.
 
 - The lifetime of the ``DomainEndpointRoutingTable`` is that of the **Domain Endpoint Node**, consequently, the routing table is ephemeral and lives for the duration of the **Domain Endpoint Node**.
 
@@ -171,52 +209,55 @@ These are:
    - ```/health```
    - ```/lookup```
    - ```/remove```
+   - ```/update```
 
 #### Requirement 5.1 - Endpoint Registration:
 
 When an Event Sink wished to be discovered by the mesh network, it needs to register its listening and health check URI's and the domains that it can accept event messages for.
 
-An Event Sink will register the domains, by calling the ```/register``` for an IP Address/Port of a Domain Endpoint Node. The ```/register``` endpoint is an HTTP POST.
+- An Event Sink will register the domains, by calling the ```/register``` for an IP Address/Port of a Domain Endpoint Node. The ```/register``` endpoint is an HTTP POST.
 
-An example JSON payload:
+- The data must be serialized using messagepack before it is posted to the ```/register``` route.
 
-```json
-  [
-    {
-        "domainName" : "starfoods.food@v1",
-        "domainUris" : [
-          {
-            "listener" : "https://domain1:5050",
-            "healthCheck" : "https://domain1:5076"
-          },
-          {
-            "listener" : "https://domain1:5051",
-            "healthCheck" : "https://domain1:5077"
-          }
-        ]
-    },
-    {
-        "domainName" : "starfoods.quality@v1",
-        "domainUris" : [
-          {
-            "listener" : "https://domain2:5060",
-            "healthCheck" : "https://domain2:5061"
-          },
-          {
-            "listener" : "https://domain3:5080",
-            "healthCheck" : "https://domain3:5081"
-          }
-        ]
-      }
-  ]
-```
+    An example JSON payload before being serialized into messagepack format:
+
+    ```json
+    [
+      {
+          "domainName" : "starfoods.food@v1",
+          "domainUris" : [
+            {
+              "listener" : "https://domain1:5050",
+              "healthCheck" : "https://domain1:5076"
+            },
+            {
+              "listener" : "https://domain1:5051",
+              "healthCheck" : "https://domain1:5077"
+            }
+          ]
+      },
+      {
+          "domainName" : "starfoods.quality@v1",
+          "domainUris" : [
+            {
+              "listener" : "https://domain2:5060",
+              "healthCheck" : "https://domain2:5061"
+            },
+            {
+              "listener" : "https://domain3:5080",
+              "healthCheck" : "https://domain3:5081"
+            }
+          ]
+        }
+    ]
+    ```
 
 #### Requirement 5.2 - Domain Lookup
 When an Event Router or Sink needs to obtain the IP Address/Port for a specific domain, it needs t query the mesh network through one of the Domain Endpoint Nodes in the mesh by calling the ```/lookup``` API. The lookup API
 
-- The **Event Sink of Router** will query for a domain by issuing a HTTP GET request. If for example, the event router wanted to know the IP Address/Port for the **starfoods.quality@v1** domain, issue a HTTP GET request against the DOmain Endpoint Node's HTTP server address, using the following parameters : ```/lookup?domain=starfoods.quality@v1```.
+- The **Event Sink/Router** will query for a domain by issuing a HTTP GET request. If for example, the event router wanted to know the IP Address/Port for the **starfoods.quality@v1** domain, issue a HTTP GET request against the Domain Endpoint Node's HTTP server address, using the following parameters : ```/lookup?domain=starfoods.quality@v1```.
 
-- If the domain is found then mesh network, then the following json payload will be returned to the **Event Sink of Router**:
+- If the domain is found in the mesh network, then the following json payload will be returned to the **Event Sink/Router**:
 
 ```json
 {
@@ -233,7 +274,7 @@ When an Event Router or Sink needs to obtain the IP Address/Port for a specific 
   ]
 }
 ```
-- If the domain is not found then the following json payload  will be returned to the **Event Sink of Router**:
+- If the domain is not found then the following json payload will return an empty list of domainURI's to the **Event Sink/Router**:
 
 ```json
 {
@@ -257,37 +298,17 @@ This thread "listens" for inbound HTTP requests on an IP Address/Port that is sp
 
 - The **HTTP Server** thread needs to ensure that appropriate URL encoding is done to the HTTP POST request.
 
-- Upon receipt of HTTP POST message, the **HTTP Server** thread will convert the incoming JSON format to the Data Transfer Object (DTO) ```DomainEndpointList``` defined below. 
+- Upon receipt of HTTP POST message, the **HTTP Server** thread will convert the incoming messagepack formatted data to the ```DomainEndpoints``` Data Transfer Object (DTO) defined above. 
   
-  ```rust
-    use serde::{Deserialize, Serialize};
-    use url::Url;
+- The **Routing Table Manager** will read the ```DomainEndpoints``` data from the frontend channel.
 
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct DomainUri {
-        pub listener: Url,
-        pub health_check: Url,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct DomainConfig {
-        pub domain_name: String,
-        pub domain_uris: Vec<DomainUri>,
-    }
-
-    // Your full array type is a Vec<DomainConfig>
-    pub type DomainEndpointList = Vec<DomainConfig>;
-    ```
-- Once converted to the DTO, the **HTTP Server** thread will convert the incoming JSON format to a list of ```ChannelMessage``` assigning the "origin" the value of ```Http``` and the ```action``` field the value of ```Insert```, then mapping the ```domain```, ```listener``` and ```health_check``` fields with their corresponding values from the DTO. 
-- Once converted, each ```ChannelMessage``` in the list is written to the the frontend channel.
-
-- The **Routing Table Manager** will read each ```ChannelMessage``` from the frontend channel as it becomes available.
 - The **Routing Table Manager** will update the ```DomainEndpointRoutingTable``` with the domain registration data, ensuring that no duplicates exists within the ```DomainEndpointRoutingTable```.
-- The **Routing Table Manager** will write each ```ChannelMessage``` to the backend channel.
-- The **Gossip Coordinator** will read each ```ChannelMessage``` from the backend channel as it becomes available.
-- The **Gossip Coordinator** will publish each ```ChannelMessage``` to ```saorsa-gossip``` where the ```saorsa-gossip``` will ensure that duplicate domains are merged if the ```listener``` and ```health_check``` do not already exist in the mesh, otherwise the duplicate value is discarded.
+  
+- The **Routing Table Manager** will write the ```DomainEndpoints``` data to the backend channel.
+
+- The **Gossip Coordinator** will read the ```DomainEndpoints``` data from the backend channel.
+
+- The **Gossip Coordinator** will iterate through the list of domains and their domainURI's and publish each domains data to ```saorsa-gossip``` where the ```saorsa-gossip``` will ensure that duplicate domains are merged if the ```listener``` and ```health_check``` do not already exist in the mesh, otherwise the duplicate value is discarded.
 
 #### Register Sequence Diagram
 ```mermaid

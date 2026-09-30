@@ -46,7 +46,11 @@ pub struct LookupMessage {
     pub domain: String,
 }
 
-// --- THE DISCRIMINATED UNION ---
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultMessage {
+    pub domain_endpoints: DomainEndpoints,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "messageType", rename_all = "camelCase")]
@@ -55,6 +59,7 @@ pub enum ChannelMessage {
     Remove(RemoveMessage),
     Update(UpdateMessage),
     Lookup(LookupMessage),
+    Result(ResultMessage),
 }
 
 // --- Channel Worker / Consumer Logic ---

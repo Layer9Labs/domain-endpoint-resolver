@@ -12,7 +12,6 @@ The following diagram defines the structural element and communication paths bet
 
 ![Domain Endpoint Node](<Domain EndPoint Node.svg>)
 
-
 1. **HTTP Server** execution thread using tokio-quiche that exposes four HTTP routes as an API surface. There are:
    - ```/register```
    - ```/health```
@@ -28,7 +27,7 @@ The following diagram defines the structural element and communication paths bet
 
     This thread communicates with downstream threads via a channel.
   
-4. **Gossip Coordinator** an execution thread responsible for communicating routing table changes from the **Routing Table Manager** to other Domain Endpoint Nodes in the mesh. It is also responsible for communicating mesh changes an updates back to **Routing Table Manager**.
+4. **Mesh Manager** an execution thread responsible for communicating routing table changes from the **Routing Table Manager** to other Domain Endpoint Nodes in the mesh. It is also responsible for communicating mesh changes an updates back to **Routing Table Manager**.
 Communication with the **Routing Table Manager** thread is done via a channel. 
 
 1. **Health Heartbeat** an execution thread, that is responsible for making HTTP health check for all of the locally scoped healthCheck entries in the **Domain Endpoint Node Routing Table**. This thread will communicate health check changes with the **Routing Table Manager** using the same channel that the **HTTP Server** thread uses.
@@ -156,7 +155,7 @@ pub struct RoutingTableData {
 }
 
 // Type alias representing the dictionary of domain names to their records
-pub type DomainEndpointRoutingTable = HashMap<String, Vec<RoutingTableData>>;
+pub type DomainEndpointRoutingTable = RwLock<HashMap<String, Vec<RoutingTableData>>>;
 ```
 
 Outlined below is a JSON example of what the payload of the routing table could be.
@@ -306,22 +305,23 @@ This thread "listens" for inbound HTTP requests on an IP Address/Port that is sp
   
 - The **Routing Table Manager** will write the ```DomainEndpoints``` data to the backend channel.
 
-- The **Gossip Coordinator** will read the ```DomainEndpoints``` data from the backend channel.
+- The **Mesh Manager** will read the ```DomainEndpoints``` data from the backend channel.
 
-- The **Gossip Coordinator** will iterate through the list of domains and their domainURI's and publish each domains data to ```saorsa-gossip``` where the ```saorsa-gossip``` will ensure that duplicate domains are merged if the ```listener``` and ```health_check``` do not already exist in the mesh, otherwise the duplicate value is discarded.
+- The **Mesh Manager** will iterate through the list of domains and their domainURI's and publish each domains data to ```saorsa-gossip``` where the ```saorsa-gossip``` will ensure that duplicate domains are merged if the ```listener``` and ```health_check``` do not already exist in the mesh, otherwise the duplicate value is discarded.
 
 #### Register Sequence Diagram
 ```mermaid
 sequenceDiagram
     participant ES as Event Sink
     participant DEN as Domain Endpoint Node Process
-    participant HTTP as HTTP Server
-    participant FE@{ "type": "queue" } as Frontend Channel
-    participant RTM as Routing Table Manager
-    participant DERT@{ "type": "entity" } as DomainEndpointRoutingTable
-    participant BE@{ "type": "queue" } as Backend Channel
-    participant GC as Gossip Coordinator
-    participant SG as soarsa-gossip
+    participant HTTP as HTTP Server <thread>
+    participant FE as Frontend Channel <channel>
+    participant RTM as Routing Table Manager <thread>
+    participant DERT as DomainEndpointRoutingTable <store>
+    participant BE as Backend Channel <channel>
+    participant MM as Mesh Manager <thread>
+    participant SG as soarsa-gossip <crate>
+    participant HH as Health Heartbeat <thread>
 
     DEN->>DEN: Start HTTP Server Thread
     DEN->>DEN: Start Routing Table Manager Thread
@@ -330,30 +330,24 @@ sequenceDiagram
     ES->>+HTTP: HTTP POST /register
     par
       activate HTTP
-      HTTP->>HTTP: Convert JSON to ChannelMessage
-      loop
-        HTTP->>+FE: Write ChannelMessage
-      end
+      HTTP->>+FE: Write ChannelMessage as RegisterMessage
+      HTTP-->>-ES: 200 OK
       deactivate HTTP
     and
       activate RTM
-      loop
-        FE->>RTM: Read ChannelMessage
-        RTM->>RTM: Check for Duplicate Entries
-        RTM->>DERT: Update DomainEndpointRoutingTable
-        RTM->>BE: Write ChannelMessage
-      end
-        RTM-->>FE: Registration confirmed
-        FE-->>-HTTP: Registration confirmed
-        HTTP-->>-ES: 200 OK
+      FE->>RTM: Read  ChannelMessage as RegisterMessage
+      RTM->>RTM: Check for Duplicate Entries
+      RTM->>DERT: Update DomainEndpointRoutingTable
+      RTM->>BE: Write ChannelMessage as RegisterMessage
       deactivate RTM
     and
-      activate GC
+      activate MM
+      BE->>MM: Read ChannelMessage as RegisterMessage
       loop
-        BE->>GC: Read ChannelMessage
-        GC->>SG: Publish ChannelMessage
+        MM->>MM: Iterate domains 
+        MM->>SG: Publish DomainEndpoint data to Mesh Peers
       end
-      deactivate GC
+      deactivate MM
     end
 ```
 
@@ -402,16 +396,16 @@ sequenceDiagram
     participant ES as Event Sink
     participant DEN as Domain Endpoint Node Process
     participant HTTP as HTTP Server
-    participant FE@{ "type": "queue" } as Frontend Channel
+    participant FE as Frontend Channel
     participant RTM as Routing Table Manager
-    participant DERT@{ "type": "entity" } as DomainEndpointRoutingTable
-    participant BE@{ "type": "queue" } as Backend Channel
-    participant GC as Gossip Coordinator
+    participant DERT as DomainEndpointRoutingTable
+    participant BE as Backend Channel
+    participant MM as Mesh Manager
     participant SG as soarsa-gossip
 
     DEN->>DEN: Start HTTP Server Thread
     DEN->>DEN: Start Routing Table Manager Thread
-    DEN->>DEN: Start Gossip Coordinator Thread
+    DEN->>DEN: Start Mesh Manager Thread
     DEN->>DEN: Start Health Heartbeat Thread
     ES->>+HTTP: HTTP POST /lookup
     par
@@ -466,7 +460,7 @@ It is possible to have two event sinks listening for events for the same domain.
 
 - Given that there could be multiple "listener" and "healthCheck" URI's for a given domain, when a healthCheck fails, the healthCheck's corresponding listener and healthCheck URI should be removed from the list of "domainUris" URI's for the given domain. There is a 1:1 relationship between the "listener" URI and it's healthCheck endpoint. When the healthCheck is removed because of a failure, so should the listener entry for that healthCheck.
 
-### Requirement 8 - Gossip Coordinator
+### Requirement 8 - Mesh Manager
 
 
 ### Requirement 8 - Health Heartbeat
